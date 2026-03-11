@@ -4,8 +4,12 @@ from typing import Iterable
 from langchain_core.messages import AIMessage, AnyMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
-from backend.llm import invoke_chat_completion, normalize_text_content
-from backend.state import MeetingState
+try:
+    from backend.llm import invoke_chat_completion, normalize_text_content
+    from backend.state import MeetingState
+except ModuleNotFoundError:
+    from llm import invoke_chat_completion, normalize_text_content
+    from state import MeetingState
 
 MAX_ROUNDS = int(os.getenv("EXPERTAI_MAX_ROUNDS", "6"))
 SUMMARY_TRIGGER_ROUND = int(os.getenv("EXPERTAI_SUMMARY_TRIGGER_ROUND", "5"))
@@ -199,7 +203,8 @@ async def expert_node(state: MeetingState) -> dict[str, object]:
         [
             SystemMessage(content=_build_expert_system_prompt(current_speaker)),
             HumanMessage(content=_build_expert_context(state)),
-        ]
+        ],
+        model_config=state.get("model_config"),
     )
 
     expert_reply = AIMessage(content=response_text, name=current_speaker)
@@ -226,7 +231,8 @@ async def memory_manager_node(state: MeetingState) -> dict[str, object]:
         _build_memory_summary_prompt(
             existing_summary=state.get("memory_summary", ""),
             archived_dialogue=archived_dialogue,
-        )
+        ),
+        model_config=state.get("model_config"),
     )
 
     return {
@@ -239,7 +245,8 @@ async def summary_node(state: MeetingState) -> dict[str, object]:
         [
             SystemMessage(content=_build_summary_system_prompt()),
             HumanMessage(content=_build_summary_context(state)),
-        ]
+        ],
+        model_config=state.get("model_config"),
     )
     return {"summary_report": response_text}
 

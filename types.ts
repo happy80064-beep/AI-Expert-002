@@ -1,4 +1,14 @@
 
+export type AIProvider =
+  | 'OpenAI'
+  | 'Gemini'
+  | 'Moonshot'
+  | 'DeepSeek'
+  | 'Google'
+  | 'Aliyun'
+  | 'ByteDance'
+  | 'Zhipu';
+
 export type ExpertRole = 
   | '商业咨询' 
   | '财务融资' 
@@ -22,12 +32,12 @@ export interface Expert {
 export interface AIModelConfig {
   id: string;
   name: string;
-  provider: 'Google' | 'DeepSeek' | 'OpenAI' | 'Aliyun' | 'ByteDance' | 'Zhipu' | 'Moonshot';
+  provider: AIProvider;
   modelId: string; // Actual API model string or internal mapped ID
   isEnabled: boolean;
   apiKey?: string; 
   baseUrl?: string; // Endpoint URL
-  corsProxy?: string; // Optional CORS Proxy Prefix
+  corsProxy?: string; // Deprecated legacy field kept for backward compatibility
   isVerified?: boolean; // UI state for connection test
 }
 

@@ -7,6 +7,11 @@ from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_openai import ChatOpenAI
 
+try:
+    from backend.provider_config import resolve_provider_base_url
+except ModuleNotFoundError:
+    from provider_config import resolve_provider_base_url
+
 load_dotenv()
 
 FAKE_LLM_FLAGS = {"1", "true", "yes", "on"}
@@ -43,9 +48,16 @@ def normalize_text_content(content: Any) -> str:
 
 def _resolve_model_settings(model_config: dict[str, Any] | None = None) -> dict[str, Any]:
     config = model_config or {}
+    provider = config.get("provider")
+    base_url = (
+        config.get("baseUrl")
+        or resolve_provider_base_url(provider)
+        or os.getenv("OPENAI_BASE_URL")
+        or os.getenv("OPENAI_API_BASE")
+    )
     return {
         "api_key": config.get("apiKey") or os.getenv("OPENAI_API_KEY"),
-        "base_url": config.get("baseUrl") or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE"),
+        "base_url": base_url,
         "model": config.get("modelId") or os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         "temperature": float(config.get("temperature") or os.getenv("OPENAI_TEMPERATURE", "0.2")),
     }

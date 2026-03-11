@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import json
 from typing import Any, AsyncIterator, Literal
@@ -8,14 +10,20 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 from sse_starlette import EventSourceResponse
 
-from backend.graph import FINISH_MARKER, app_graph
-from backend.llm import invoke_chat_completion, to_openai_like_response
-from backend.state import MeetingState
+try:
+    from backend.graph import FINISH_MARKER, app_graph
+    from backend.llm import invoke_chat_completion, to_openai_like_response
+    from backend.state import MeetingState
+except ModuleNotFoundError:
+    from graph import FINISH_MARKER, app_graph
+    from llm import invoke_chat_completion, to_openai_like_response
+    from state import MeetingState
 
 
 class StartMeetingRequest(BaseModel):
     topic: str = Field(..., min_length=1, description="Discussion topic or source material.")
     experts: list[str] = Field(..., min_length=1, description="Expert role names.")
+    modelConfig: ModelConfigPayload | None = None
 
 
 class ChatMessagePayload(BaseModel):
@@ -24,6 +32,7 @@ class ChatMessagePayload(BaseModel):
 
 
 class ModelConfigPayload(BaseModel):
+    provider: str | None = None
     apiKey: str | None = None
     baseUrl: str | None = None
     modelId: str | None = None
@@ -100,6 +109,7 @@ def _to_langchain_messages(messages: list[ChatMessagePayload]) -> list[SystemMes
 async def meeting_streamer(
     topic: str,
     experts: list[str],
+    model_config: dict[str, Any] | None,
     request: Request,
 ) -> AsyncIterator[dict[str, str]]:
     initial_state: MeetingState = {
@@ -116,6 +126,7 @@ async def meeting_streamer(
         "memory_summary": "",
         "blackboard": {},
         "summary_report": "",
+        "model_config": model_config or {},
     }
 
     active_speaker = ""
@@ -314,6 +325,7 @@ async def start_meeting(
 ) -> EventSourceResponse:
     topic = payload.topic.strip()
     experts = [expert.strip() for expert in payload.experts if expert.strip()]
+    model_config = payload.modelConfig.model_dump(exclude_none=True) if payload.modelConfig else None
 
     if not topic:
         raise HTTPException(status_code=400, detail="topic cannot be empty")
@@ -321,7 +333,7 @@ async def start_meeting(
         raise HTTPException(status_code=400, detail="experts cannot be empty")
 
     return EventSourceResponse(
-        meeting_streamer(topic, experts, request),
+        meeting_streamer(topic, experts, model_config, request),
         media_type="text/event-stream",
         ping=15,
     )

@@ -61,14 +61,19 @@ python -m pip install -r backend/requirements.txt
 
 #### 3. 配置后端环境变量
 
-如果使用真实模型，请在项目根目录或运行环境中配置：
+如果使用真实模型，建议先参考项目根目录的 `.env.example`，并在运行环境中配置：
 
 ```bash
 OPENAI_API_KEY=your_api_key
-OPENAI_BASE_URL=https://your-openai-compatible-endpoint/v1
+OPENAI_BASE_URL=https://api.openai.com/v1
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+MOONSHOT_BASE_URL=https://api.moonshot.cn/v1
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_TEMPERATURE=0.2
 ```
+
+前端会议室里的模型配置区现在只需要用户选择提供商、模型并输入自己的 `API Key`，系统会自动匹配对应的 `Base URL`。
 
 如果你只想先验证完整流程，可以启用假模型模式：
 
@@ -227,14 +232,19 @@ python -m pip install -r backend/requirements.txt
 
 #### 3. Configure backend environment variables
 
-For a real model provider, configure:
+For a real model provider, start from `.env.example` and configure:
 
 ```bash
 OPENAI_API_KEY=your_api_key
-OPENAI_BASE_URL=https://your-openai-compatible-endpoint/v1
+OPENAI_BASE_URL=https://api.openai.com/v1
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+MOONSHOT_BASE_URL=https://api.moonshot.cn/v1
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_TEMPERATURE=0.2
 ```
+
+The meeting-room model settings now require only provider selection, model selection, and the user's own `API Key`. The matching `Base URL` is resolved automatically.
 
 For end-to-end smoke testing without a real provider:
 

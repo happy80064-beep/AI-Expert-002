@@ -4,6 +4,18 @@ import { BookOpenText, FileText, LoaderCircle, MessageSquareMore, Play, Square, 
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+import type { AIModelConfig } from '../types';
+import {
+  DEFAULT_MANAGED_MODELS,
+  MANAGED_PROVIDER_OPTIONS,
+  PROVIDER_ENV_KEYS,
+  PROVIDER_MODEL_PRESETS,
+  buildManagedModelConfig,
+  getManagedProvider,
+  resolveDefaultModelId,
+  resolveProviderBaseUrl,
+} from '../modelProviders';
+
 type ChatMessage = {
   id: string;
   role: 'system' | 'expert';
@@ -68,6 +80,8 @@ const AVATAR_STYLES = [
   'bg-cyan-100 text-cyan-700 ring-cyan-200',
 ];
 
+const MODEL_CONFIG_STORAGE_KEY = 'expertai_meeting_model_config';
+
 const createId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
 const parseExperts = (value: string) => {
@@ -86,6 +100,31 @@ const speakerStyle = (speaker: string) => {
   return AVATAR_STYLES[hash % AVATAR_STYLES.length];
 };
 
+const getDefaultMeetingModelConfig = (): AIModelConfig => ({
+  ...DEFAULT_MANAGED_MODELS[0],
+  apiKey: '',
+});
+
+const loadStoredMeetingModelConfig = (): AIModelConfig => {
+  if (typeof window === 'undefined') {
+    return getDefaultMeetingModelConfig();
+  }
+
+  try {
+    const stored = window.localStorage.getItem(MODEL_CONFIG_STORAGE_KEY);
+    if (!stored) {
+      return getDefaultMeetingModelConfig();
+    }
+
+    return buildManagedModelConfig({
+      ...getDefaultMeetingModelConfig(),
+      ...JSON.parse(stored),
+    });
+  } catch {
+    return getDefaultMeetingModelConfig();
+  }
+};
+
 const MeetingRoom: React.FC<MeetingRoomProps> = ({
   apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000',
   initialTopic = '',
@@ -101,12 +140,16 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({
   const [memorySummary, setMemorySummary] = useState('');
   const [blackboard, setBlackboard] = useState<Record<string, string>>({});
   const [showSummary, setShowSummary] = useState(false);
+  const [meetingModelConfig, setMeetingModelConfig] = useState<AIModelConfig>(() => loadStoredMeetingModelConfig());
 
   const abortRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   const experts = useMemo(() => parseExperts(expertsInput), [expertsInput]);
-  const canStart = topic.trim().length > 0 && experts.length > 0 && !isStreaming;
+  const managedProvider = getManagedProvider(meetingModelConfig.provider);
+  const providerBaseUrl = resolveProviderBaseUrl(managedProvider, meetingModelConfig.baseUrl);
+  const providerModelOptions = PROVIDER_MODEL_PRESETS[managedProvider];
+  const canStart = topic.trim().length > 0 && experts.length > 0 && !!meetingModelConfig.apiKey?.trim() && !isStreaming;
   const blackboardEntries = Object.entries(blackboard);
 
   useEffect(() => {
@@ -118,6 +161,21 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({
       abortRef.current?.abort();
     };
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.localStorage.setItem(
+      MODEL_CONFIG_STORAGE_KEY,
+      JSON.stringify({
+        provider: managedProvider,
+        modelId: meetingModelConfig.modelId,
+        apiKey: meetingModelConfig.apiKey ?? '',
+      }),
+    );
+  }, [managedProvider, meetingModelConfig.apiKey, meetingModelConfig.modelId]);
 
   const pushSystemMessage = (content: string) => {
     setMessages((current) => [
@@ -206,7 +264,24 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({
     setShowSummary(false);
   };
 
+  const updateMeetingModelConfig = (partial: Partial<AIModelConfig>) => {
+    setMeetingModelConfig((current) => buildManagedModelConfig({ ...current, ...partial }));
+  };
+
+  const handleProviderChange = (provider: AIModelConfig['provider']) => {
+    updateMeetingModelConfig({
+      provider,
+      modelId: resolveDefaultModelId(provider),
+      baseUrl: resolveProviderBaseUrl(provider),
+    });
+  };
+
   const stopMeeting = () => {
+    if (!selectedModelConfig.apiKey?.trim()) {
+      setError('请先填写模型 API Key。');
+      return;
+    }
+
     abortRef.current?.abort();
     abortRef.current = null;
     setIsStreaming(false);
@@ -217,6 +292,7 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({
   const startMeeting = async () => {
     const cleanedTopic = topic.trim();
     const cleanedExperts = parseExperts(expertsInput);
+    const selectedModelConfig = buildManagedModelConfig(meetingModelConfig);
 
     if (!cleanedTopic || cleanedExperts.length === 0) {
       setError('请先填写材料内容，并至少提供 1 位专家。');
@@ -239,6 +315,11 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({
         body: JSON.stringify({
           topic: cleanedTopic,
           experts: cleanedExperts,
+          modelConfig: {
+            provider: selectedModelConfig.provider,
+            apiKey: selectedModelConfig.apiKey,
+            modelId: selectedModelConfig.modelId,
+          },
         }),
         signal: controller.signal,
         openWhenHidden: true,
@@ -415,6 +496,64 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({
                       {expert}
                     </span>
                   ))}
+                </div>
+              </section>
+
+              <section className="rounded-3xl bg-[#f7faf7] p-4 ring-1 ring-slate-200/70">
+                <div className="mb-3">
+                  <h2 className="text-sm font-semibold text-slate-900">模型配置</h2>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">
+                    只需要选择提供商、模型并填写你自己的 API Key，系统会自动使用对应的 Base URL。
+                  </p>
+                </div>
+
+                <div className="grid gap-3">
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-500">提供商</label>
+                    <select
+                      value={managedProvider}
+                      onChange={(event) => handleProviderChange(event.target.value as AIModelConfig['provider'])}
+                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100"
+                    >
+                      {MANAGED_PROVIDER_OPTIONS.map((provider) => (
+                        <option key={provider} value={provider}>
+                          {provider}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-500">模型</label>
+                    <select
+                      value={meetingModelConfig.modelId}
+                      onChange={(event) => updateMeetingModelConfig({ modelId: event.target.value })}
+                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100"
+                    >
+                      {providerModelOptions.map((preset) => (
+                        <option key={preset.modelId} value={preset.modelId}>
+                          {preset.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-500">API Key</label>
+                    <input
+                      type="password"
+                      value={meetingModelConfig.apiKey ?? ''}
+                      onChange={(event) => updateMeetingModelConfig({ apiKey: event.target.value })}
+                      placeholder="sk-..."
+                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100"
+                    />
+                  </div>
+
+                  <div className="rounded-2xl bg-white px-4 py-3 ring-1 ring-slate-200">
+                    <div className="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400">Base URL</div>
+                    <div className="mt-2 break-all font-mono text-xs text-slate-600">{providerBaseUrl}</div>
+                    <div className="mt-2 text-xs text-slate-400">环境变量键：{PROVIDER_ENV_KEYS[managedProvider]}</div>
+                  </div>
                 </div>
               </section>
 

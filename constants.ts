@@ -1,4 +1,5 @@
 import { Expert, AIModelConfig } from './types';
+import { DEFAULT_MANAGED_MODELS } from './modelProviders';
 
 export const INITIAL_EXPERTS: Expert[] = [
   {
@@ -51,12 +52,4 @@ export const INITIAL_EXPERTS: Expert[] = [
   }
 ];
 
-export const INITIAL_MODELS: AIModelConfig[] = [
-  { id: 'm1', name: 'Gemini 3 Pro', provider: 'Google', modelId: 'gemini-3-pro-preview', isEnabled: true },
-  { id: 'm2', name: 'Gemini 3 Flash', provider: 'Google', modelId: 'gemini-3-flash-preview', isEnabled: true },
-  { id: 'm3', name: 'DeepSeek V3', provider: 'DeepSeek', modelId: 'deepseek-chat', isEnabled: true },
-  { id: 'm4', name: 'Qwen Max', provider: 'Aliyun', modelId: 'qwen-max', isEnabled: true },
-  { id: 'm5', name: 'Doubao Pro', provider: 'ByteDance', modelId: 'doubao-pro', isEnabled: true },
-  { id: 'm6', name: 'GPT-4o', provider: 'OpenAI', modelId: 'gpt-4o', isEnabled: true },
-  { id: 'm7', name: 'GLM-4', provider: 'Zhipu', modelId: 'glm-4', isEnabled: true },
-];
+export const INITIAL_MODELS: AIModelConfig[] = DEFAULT_MANAGED_MODELS;

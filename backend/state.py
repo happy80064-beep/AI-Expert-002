@@ -1,4 +1,4 @@
-from typing import Annotated, TypedDict
+from typing import Annotated, Any, TypedDict
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
@@ -15,3 +15,4 @@ class MeetingState(TypedDict):
     memory_summary: str
     blackboard: dict[str, str]
     summary_report: str
+    model_config: dict[str, Any]
