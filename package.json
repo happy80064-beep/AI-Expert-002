@@ -5,15 +5,17 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:frontend": "vite",
+    "dev:backend": "python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
-    "react-dom": "^19.2.4",
-    "@google/genai": "^1.38.0",
-    "react": "^19.2.4",
+    "@microsoft/fetch-event-source": "^2.0.1",
     "lucide-react": "^0.563.0",
     "mammoth": "1.6.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
     "react-markdown": "9.0.1",
     "remark-gfm": "4.0.0"
   },

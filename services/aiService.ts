@@ -1,350 +1,126 @@
-import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { Expert, AnalysisResult, StructuredAnalysis, TaskResult, AIModelConfig } from "../types";
-import * as mammoth from "mammoth/mammoth.browser";
+import * as mammoth from 'mammoth/mammoth.browser';
 
-// Backend API URL (Default to localhost in dev, configurable via env)
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+import { AIModelConfig, AnalysisResult, Expert, StructuredAnalysis, TaskResult } from '../types';
 
-// NOTE: We keep GoogleGenAI for multimodal file extraction locally if needed,
-// but for chat/tasks, we prefer the unified backend proxy.
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
 
-const getAIClient = () => {
-  const apiKey = process.env.API_KEY || import.meta.env.VITE_GOOGLE_API_KEY;
-  if (!apiKey) {
-    console.warn("API Key not found in environment variables. File extraction might fail.");
-    // Return a dummy or throw, but better to throw when used.
-    // throw new Error("API Key not found");
-  }
-  return new GoogleGenAI({ apiKey: apiKey || 'dummy' });
+type ChatMessage = {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
 };
 
-// Helper to convert File to Base64
-const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: string; mimeType: string } }> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const base64Data = reader.result as string;
-      const base64Content = base64Data.split(',')[1];
-      resolve({
-        inlineData: {
-          data: base64Content,
-          mimeType: file.type,
-        },
-      });
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+const callBackendChat = async (
+  messages: ChatMessage[],
+  options?: {
+    modelConfig?: AIModelConfig;
+    jsonMode?: boolean;
+  },
+): Promise<string> => {
+  const response = await fetch(`${API_BASE_URL}/api/chat`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      messages,
+      jsonMode: options?.jsonMode ?? false,
+      modelConfig: options?.modelConfig
+        ? {
+            apiKey: options.modelConfig.apiKey,
+            baseUrl: options.modelConfig.baseUrl,
+            modelId: options.modelConfig.modelId,
+          }
+        : undefined,
+    }),
   });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Backend Error (${response.status}): ${errorText}`);
+  }
+
+  const data = await response.json();
+  return data?.choices?.[0]?.message?.content ?? '';
 };
 
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-async function withRetry<T>(
-  operation: () => Promise<T>, 
-  maxRetries: number = 3, 
-  baseDelay: number = 2000
-): Promise<T> {
-  let lastError: any;
-  
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await operation();
-    } catch (error: any) {
-      lastError = error;
-      
-      const errorMessage = error?.message || error?.error?.message || '';
-      const isRateLimit = errorMessage.includes('429') || errorMessage.includes('Quota exceeded');
-      const isOverloaded = errorMessage.includes('503') || errorMessage.includes('Overloaded');
-      const isFetchError = errorMessage.includes('Failed to fetch');
-
-      if (isRateLimit || isOverloaded || isFetchError) {
-        const waitTime = baseDelay * Math.pow(2, attempt);
-        const jitter = Math.random() * 1000; 
-        console.warn(`API request failed (Attempt ${attempt + 1}/${maxRetries}). Retrying in ${Math.round(waitTime + jitter)}ms...`);
-        await delay(waitTime + jitter);
-        continue;
-      }
-      throw error;
-    }
-  }
-  throw lastError;
-}
-
-/**
- * Calls the Backend Proxy to handle API requests.
- * This is crucial for "No VPN" support (Server-side proxy) and CORS handling.
- */
-async function callBackendProxy(
-    config: AIModelConfig, 
-    messages: Array<{ role: string; content: string }>,
-    jsonMode: boolean
-): Promise<string> {
-    try {
-        const response = await fetch(`${API_BASE_URL}/api/chat`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                messages,
-                modelConfig: config,
-                jsonMode
-            })
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            let errMsg = errorText;
-            try {
-                const json = JSON.parse(errorText);
-                errMsg = json.error?.message || json.message || errorText;
-            } catch (e) {}
-            throw new Error(`Backend Error (${response.status}): ${errMsg}`);
-        }
-
-        const data = await response.json();
-        return data.choices?.[0]?.message?.content || "";
-    } catch (error: any) {
-        console.error("Backend Proxy Call Failed:", error);
-        throw error;
-    }
-}
-
-/**
- * Unified API Handler.
- * Decides whether to use the Backend Proxy or Direct Browser Call.
- */
-async function callAIProvider(
-  config: AIModelConfig,
-  messages: Array<{ role: string; content: string }>,
-  jsonMode: boolean = false
-): Promise<string> {
-  if (!config.apiKey) {
-    throw new Error(`Model ${config.name} is missing API Key`);
-  }
-
-  // STRATEGY:
-  // 1. If it's a foreign provider (OpenAI, Google) and no custom CORS proxy is set,
-  //    we force use our Backend Proxy to ensure connectivity (No VPN needed).
-  // 2. If user explicitly set a CORS proxy (e.g. cors-anywhere), use that.
-  // 3. For domestic providers (DeepSeek, etc.), try Direct first (faster), 
-  //    but if it fails with CORS, we could fallback (not implemented yet, rely on user setting proxy).
-  
-  const isForeignProvider = ['OpenAI', 'Google'].includes(config.provider);
-  const hasCustomProxy = !!config.corsProxy;
-  
-  // Use Backend Proxy for ALL providers by default (unless user overrides with their own proxy)
-  // This solves CORS issues for domestic providers (DeepSeek/Moonshot) and network issues for foreign ones.
-  if (!hasCustomProxy) {
-      return callBackendProxy(config, messages, jsonMode);
-  }
-
-  // --- Direct / CORS Proxy Logic (Only used if user manually set a CORS Proxy) ---
-
-  let endpoint = config.baseUrl?.trim() || '';
-  // Fix Endpoint
-  if (!endpoint.includes('/chat/completions') && !endpoint.includes('generateContent')) {
-      if (endpoint.endsWith('/')) endpoint = endpoint.slice(0, -1);
-      endpoint += '/chat/completions';
-  }
-
-  // Apply Custom CORS Proxy
-  if (config.corsProxy) {
-      const proxyUrl = config.corsProxy.trim().endsWith('/') ? config.corsProxy.trim() : `${config.corsProxy.trim()}/`;
-      endpoint = proxyUrl + endpoint;
-  }
-
-  const payload: any = {
-    model: config.modelId.trim(),
-    messages: messages,
-    temperature: 0.7,
-  };
-
-  if (jsonMode && config.provider !== 'Moonshot') {
-      payload.response_format = { type: "json_object" };
-  }
-
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${config.apiKey.trim()}`
-  };
-
-  if (config.corsProxy) {
-      headers['X-Requested-With'] = 'XMLHttpRequest';
+const parseJsonBlock = <T>(text: string, fallback: T): T => {
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    return fallback;
   }
 
   try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: headers,
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`API Error ${response.status}: ${errorText.slice(0, 200)}`);
-      }
-
-      const data = await response.json();
-      return data.choices?.[0]?.message?.content || "";
-  } catch (error: any) {
-      // If Direct call fails for foreign provider (and we didn't try proxy yet), 
-      // maybe we should suggest using the backend?
-      // For now, just throw.
-      throw error;
+    return JSON.parse(jsonMatch[0]) as T;
+  } catch (error) {
+    console.warn('JSON parse failed:', error);
+    return fallback;
   }
-}
+};
 
-// Export for compatibility
-export const callOpenAICompatibleAPI = callAIProvider;
-
-/**
- * Extracts text content from various file types.
- * Requires a valid modelConfig with an API Key (preferably Gemini/Google) for vision tasks.
- */
-export const extractContentFromFile = async (file: File, modelConfig?: AIModelConfig): Promise<string> => {
-  // 1. Text / Markdown
+export const extractContentFromFile = async (file: File): Promise<string> => {
   if (file.type === 'text/plain' || file.name.endsWith('.md') || file.name.endsWith('.txt')) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = (e) => resolve(e.target?.result as string);
+      reader.onload = (event) => resolve((event.target?.result as string) || '');
       reader.onerror = reject;
       reader.readAsText(file);
     });
   }
 
-  // 2. Word (.docx)
   if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.name.endsWith('.docx')) {
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      const result = await mammoth.extractRawText({ arrayBuffer });
-      return `[Word Document Content]:\n${result.value}`;
-    } catch (e) {
-      console.error("Mammoth error:", e);
-      throw new Error("Word Document parsing failed");
-    }
+    const arrayBuffer = await file.arrayBuffer();
+    const result = await mammoth.extractRawText({ arrayBuffer });
+    return `[Word Document Content]\n${result.value}`;
   }
 
-  // 3. PDF / Images (Using AI Vision)
-  if (file.type === 'application/pdf' || file.type.startsWith('image/')) {
-    try {
-      // If we have a Google/Gemini config provided, use its key.
-      // Otherwise, try to use the environment variable key as fallback.
-      let apiKey = import.meta.env.VITE_GOOGLE_API_KEY || process.env.API_KEY;
-      
-      if (modelConfig && modelConfig.provider === 'Google' && modelConfig.apiKey) {
-          apiKey = modelConfig.apiKey;
-      }
-
-      console.log("PDF Extraction: Using API Key?", apiKey ? "Yes (Ends with " + apiKey.slice(-4) + ")" : "No");
-
-      if (!apiKey) {
-           // If user is using Qwen/OpenAI, we can't easily use their keys for Gemini Vision directly here
-           // unless we proxy it or use their vision models. 
-           // For now, throw a clearer error.
-           throw new Error("PDF/Image parsing requires a Google Gemini API Key. Please add a Google model or set VITE_GOOGLE_API_KEY.");
-      }
-
-      const ai = new GoogleGenAI({ apiKey });
-      const filePart = await fileToGenerativePart(file);
-      const model = 'gemini-2.0-flash'; 
-
-      const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
-        model: model,
-        contents: {
-          parts: [
-            filePart,
-            { text: "Extract all text and describe charts from this file in detail." }
-          ]
-        }
-      }));
-      
-      return `[AI Extracted Content]:\n${response.text}`;
-    } catch (error: any) {
-      console.error("AI Extraction Failed", error);
-      const msg = error?.message || "Unknown error";
-      if (msg.includes("API key not valid")) {
-          throw new Error("Google API Key 无效或缺失。解析 PDF/图片需要 Gemini 能力，请确保您配置了 Google 模型或环境变量。");
-      }
-      throw new Error(`AI File Extraction failed: ${msg}`);
-    }
-  }
-
-  throw new Error("Unsupported file format");
+  throw new Error('PDF or image extraction has been disabled on the frontend. Move this workflow to the backend.');
 };
 
-/**
- * Tests connectivity to a model.
- */
 export const testModelConnection = async (config: AIModelConfig): Promise<{ success: boolean; msg: string }> => {
-    try {
-        await callAIProvider(config, [{ role: 'user', content: 'hi' }]);
-        return { success: true, msg: "Connected Successfully" };
-    } catch (e: any) {
-        return { success: false, msg: e.message || "Connection Failed" };
-    }
+  try {
+    await callBackendChat([{ role: 'user', content: 'ping' }], { modelConfig: config });
+    return { success: true, msg: 'Connected successfully' };
+  } catch (error) {
+    return {
+      success: false,
+      msg: error instanceof Error ? error.message : 'Connection failed',
+    };
+  }
 };
 
 export const generateExpertPersona = async (
-  role: string, 
-  customPrompt: string, 
-  customAvatar?: string, 
-  customName?: string
+  role: string,
+  customPrompt: string,
+  customAvatar?: string,
+  customName?: string,
 ): Promise<Expert> => {
-    // We need a default model for system tasks if none provided.
-    // For now, use the first available or hardcoded fallback?
-    // This function doesn't take config. It assumes a global/default one.
-    // Since we don't have global config access here easily without context,
-    // we might need to rely on the backend's default or fail if no key.
-    
-    // TEMPORARY: Use Google GenAI Client directly (Client Side) for persona generation 
-    // if we want to keep it simple, OR fetch from backend if we implement a "system" endpoint.
-    // Let's stick to the existing behavior: Use getAIClient (Gemini).
-    // But updated to use "gemini-2.0-flash"
-    
-    const ai = getAIClient();
-    const systemInstruction = `You are an expert system designer. Create a detailed persona for a ${role} expert. JSON output only.`;
-    
-    const promptContent = customName 
-        ? `Create persona for "${customName}" (${role}). ${customPrompt}`
-        : (customPrompt || `Create a top-tier ${role} expert.`);
+  const responseText = await callBackendChat(
+    [
+      {
+        role: 'system',
+        content:
+          'You are an expert system designer. Return JSON only with keys name and description.',
+      },
+      {
+        role: 'user',
+        content: customName
+          ? `Create a persona for ${customName} as a ${role}. ${customPrompt}`
+          : `Create a persona for a ${role}. ${customPrompt}`,
+      },
+    ],
+    { jsonMode: true },
+  );
 
-    try {
-        const response = await withRetry(() => ai.models.generateContent({
-            model: 'gemini-2.0-flash',
-            contents: promptContent,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        name: { type: Type.STRING },
-                        description: { type: Type.STRING },
-                    },
-                    required: ["name", "description"]
-                }
-            }
-        }));
-        
-        const data = JSON.parse(response.text || "{}");
-        return {
-            id: `custom_${Date.now()}`,
-            name: customName || data.name || "Unknown Expert",
-            role: role as any,
-            avatar: customAvatar || `https://picsum.photos/seed/${Date.now()}/100/100`,
-            description: data.description || "No description.",
-            isCustom: true,
-        };
-    } catch (e) {
-        console.error("Persona Generation Failed", e);
-        // Fallback
-        return {
-            id: `custom_${Date.now()}`,
-            name: customName || "New Expert",
-            role: role as any,
-            avatar: customAvatar || "",
-            description: "Failed to generate description. Please edit manually.",
-            isCustom: true
-        };
-    }
+  const persona = parseJsonBlock<{ name?: string; description?: string }>(responseText, {});
+
+  return {
+    id: `custom_${Date.now()}`,
+    name: customName || persona.name || 'New Expert',
+    role: role as Expert['role'],
+    avatar: customAvatar || `https://picsum.photos/seed/${Date.now()}/100/100`,
+    description: persona.description || 'No description available.',
+    isCustom: true,
+  };
 };
 
 export const runExpertTask = async (
@@ -352,44 +128,41 @@ export const runExpertTask = async (
   taskDescription: string,
   projectContext: string,
   teamMembers: Expert[] = [],
-  depth: number = 0,
-  modelConfig?: AIModelConfig
+  _depth = 0,
+  modelConfig?: AIModelConfig,
 ): Promise<TaskResult> => {
-  
-  const teammatesList = teamMembers.filter(e => e.id !== expert.id).map(e => `- ${e.name} (${e.role})`).join('\n');
-  const prompt = `
-    [Project]: ${projectContext}
-    [Role]: ${expert.name} (${expert.role}) - ${expert.description}
-    [Team]: ${teammatesList}
-    [Task]: ${taskDescription}
-    
-    Please respond professionally in Chinese (Markdown).
-  `;
+  const teammates = teamMembers
+    .filter((member) => member.id !== expert.id)
+    .map((member) => `- ${member.name} (${member.role})`)
+    .join('\n');
 
-  let responseText = "";
-
-  if (modelConfig) {
-      responseText = await callAIProvider(modelConfig, [
-          { role: 'system', content: `You are ${expert.name}.` },
-          { role: 'user', content: prompt }
-      ]);
-  } else {
-      // Fallback to Gemini Direct if no config passed
-      const ai = getAIClient();
-      const response = await withRetry(() => ai.models.generateContent({
-        model: 'gemini-2.0-flash',
-        contents: prompt,
-      }));
-      responseText = response.text || "";
-  }
+  const resultContent = await callBackendChat(
+    [
+      {
+        role: 'system',
+        content: `You are ${expert.name}, an expert in ${expert.role}. Respond in Chinese using Markdown.`,
+      },
+      {
+        role: 'user',
+        content: [
+          `Project context:\n${projectContext}`,
+          `Task:\n${taskDescription}`,
+          teammates ? `Team members:\n${teammates}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
+      },
+    ],
+    { modelConfig },
+  );
 
   return {
-    id: `task_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+    id: `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     expertId: expert.id,
     expertName: expert.name,
     expertAvatar: expert.avatar,
-    taskDescription: taskDescription,
-    resultContent: responseText,
+    taskDescription,
+    resultContent,
     timestamp: Date.now(),
   };
 };
@@ -397,40 +170,49 @@ export const runExpertTask = async (
 export const runTeamAnalysis = async (
   projectText: string,
   team: Expert[],
-  modelConfig: AIModelConfig
+  modelConfig: AIModelConfig,
 ): Promise<AnalysisResult> => {
-  const expertsContext = team.map(e => `Name: ${e.name}, Role: ${e.role}, Desc: ${e.description}`).join('\n');
-  const prompt = `
-    Analyze this project: ${projectText}
-    
-    Experts:
-    ${expertsContext}
-    
-    Output JSON only with: overallScore, riskLevel, summary, expertInsights[].
-  `;
+  const expertsContext = team
+    .map((expert) => `Name: ${expert.name}, Role: ${expert.role}, Desc: ${expert.description}`)
+    .join('\n');
 
-  let responseText = "";
-  // Use Unified Provider
-  responseText = await callAIProvider(modelConfig, [{ role: 'user', content: prompt }], true);
+  const responseText = await callBackendChat(
+    [
+      {
+        role: 'system',
+        content:
+          'You are an investment committee assistant. Return JSON only with overallScore, riskLevel, summary, expertInsights[].',
+      },
+      {
+        role: 'user',
+        content: `Analyze this project:\n${projectText}\n\nExperts:\n${expertsContext}`,
+      },
+    ],
+    {
+      modelConfig,
+      jsonMode: true,
+    },
+  );
 
-  // Parse JSON from response (sometimes models output markdown blocks)
-  const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-  const jsonStr = jsonMatch ? jsonMatch[0] : responseText;
-  
-  let structuredData;
-  try {
-      structuredData = JSON.parse(jsonStr);
-  } catch (e) {
-      console.warn("JSON Parse Failed", e);
-      structuredData = null;
-  }
+  const structuredData = parseJsonBlock<StructuredAnalysis | undefined>(responseText, undefined);
 
   return {
     id: `analysis_${Date.now()}`,
     modelName: modelConfig.name,
     timestamp: Date.now(),
-    content: responseText, // Keep raw text
-    structuredData: structuredData,
-    teamComposition: team.map(e => e.role)
+    content: responseText,
+    structuredData,
+    teamComposition: team.map((expert) => expert.role),
   };
+};
+
+export const callOpenAICompatibleAPI = async (
+  config: AIModelConfig,
+  messages: ChatMessage[],
+  jsonMode = false,
+): Promise<string> => {
+  return callBackendChat(messages, {
+    modelConfig: config,
+    jsonMode,
+  });
 };
