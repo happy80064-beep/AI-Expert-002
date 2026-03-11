@@ -85,8 +85,8 @@ const MODEL_CONFIG_STORAGE_KEY = 'expertai_meeting_model_config';
 
 const createId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
-const parseExperts = (value: string) => {
-  return Array.from(
+const parseExperts = (value: string) =>
+  Array.from(
     new Set(
       value
         .split(/[\n,\uFF0C\u3001]+/)
@@ -94,7 +94,6 @@ const parseExperts = (value: string) => {
         .filter(Boolean),
     ),
   );
-};
 
 const speakerStyle = (speaker: string) => {
   const hash = Array.from(speaker).reduce((sum, char) => sum + char.charCodeAt(0), 0);
@@ -151,7 +150,7 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({
   const providerBaseUrl = resolveProviderBaseUrl(managedProvider, meetingModelConfig.baseUrl);
   const providerModelOptions = PROVIDER_MODEL_PRESETS[managedProvider];
   const selectedModelConfig = buildManagedModelConfig(meetingModelConfig);
-  const canStart = topic.trim().length > 0 && experts.length > 0 && !!meetingModelConfig.apiKey?.trim() && !isStreaming;
+  const canStart = topic.trim().length > 0 && experts.length > 0 && !!selectedModelConfig.apiKey?.trim() && !isStreaming;
   const blackboardEntries = Object.entries(blackboard);
 
   useEffect(() => {
@@ -279,21 +278,6 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({
   };
 
   const stopMeeting = () => {
-    if (!selectedModelConfig.apiKey?.trim()) {
-      setError('请先填写模型 API Key。');
-      return;
-    }
-
-    if (!selectedModelConfig.apiKey?.trim()) {
-      setError('请先填写模型 API Key。');
-      return;
-    }
-
-    if (!apiBaseUrl) {
-      setError(getMissingApiBaseUrlMessage());
-      return;
-    }
-
     abortRef.current?.abort();
     abortRef.current = null;
     setIsStreaming(false);
@@ -304,10 +288,19 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({
   const startMeeting = async () => {
     const cleanedTopic = topic.trim();
     const cleanedExperts = parseExperts(expertsInput);
-    const selectedModelConfig = buildManagedModelConfig(meetingModelConfig);
 
     if (!cleanedTopic || cleanedExperts.length === 0) {
       setError('请先填写材料内容，并至少提供 1 位专家。');
+      return;
+    }
+
+    if (!selectedModelConfig.apiKey?.trim()) {
+      setError('请先填写模型 API Key。');
+      return;
+    }
+
+    if (!apiBaseUrl) {
+      setError(getMissingApiBaseUrlMessage());
       return;
     }
 
@@ -379,7 +372,7 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({
 
             if (statePayload.type === 'memory_compacted' && statePayload.memory_summary) {
               setMemorySummary(statePayload.memory_summary);
-              pushSystemMessage('主持人已压缩早期讨论，上下文切换为“摘要记忆 + 最近 2 轮 + 黑板结论”。');
+              pushSystemMessage('主持人已压缩早期讨论，后续上下文改为“摘要记忆 + 最近两轮 + 黑板结论”。');
               return;
             }
 
@@ -473,15 +466,13 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({
               <section className="rounded-3xl bg-[#f7faf7] p-4 ring-1 ring-slate-200/70">
                 <div className="mb-3">
                   <h2 className="text-sm font-semibold text-slate-900">项目材料</h2>
-                  <p className="mt-1 text-xs leading-5 text-slate-500">
-                    左侧输入背景材料，右侧实时看到多专家会议流和高管总结报告。
-                  </p>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">左侧输入背景材料，右侧实时查看专家讨论、黑板结论和总结报告。</p>
                 </div>
 
                 <textarea
                   value={topic}
                   onChange={(event) => setTopic(event.target.value)}
-                  placeholder="例如：我们正在评估一个面向中小企业的 AI 自动化平台，需要从产品、财务、市场三个角度进行可行性分析。"
+                  placeholder="例如：请从产品、财务、市场三个角度，分析一个面向中小企业的 AI 自动化平台是否适合在欧洲市场试点。"
                   className="h-64 w-full resize-none rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-700 outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100"
                 />
               </section>
@@ -514,9 +505,7 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({
               <section className="rounded-3xl bg-[#f7faf7] p-4 ring-1 ring-slate-200/70">
                 <div className="mb-3">
                   <h2 className="text-sm font-semibold text-slate-900">模型配置</h2>
-                  <p className="mt-1 text-xs leading-5 text-slate-500">
-                    只需要选择提供商、模型并填写你自己的 API Key，系统会自动使用对应的 Base URL。
-                  </p>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">只需要选择提供商、模型并填写你自己的 API Key，系统会自动使用对应的 Base URL。</p>
                 </div>
 
                 <div className="grid gap-3">
@@ -602,9 +591,7 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({
               </div>
 
               {error ? (
-                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-600">
-                  {error}
-                </div>
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-600">{error}</div>
               ) : null}
             </div>
           </aside>
@@ -667,7 +654,7 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({
                     </div>
                     <h3 className="text-lg font-semibold text-slate-900">会议尚未开始</h3>
                     <p className="mt-2 max-w-md text-sm leading-7 text-slate-500">
-                      在左侧填入项目背景与参会专家，点击“启动会议”后，这里会实时展示主持人调度、专家发言和黑板结论。
+                      在左侧填写项目背景与参会专家，点击“启动会议”后，这里会实时展示主持人调度、专家发言和黑板结论。
                     </p>
                   </div>
                 ) : null}
@@ -697,9 +684,7 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({
                         <div className="mb-1 flex items-center gap-2">
                           <span className="text-sm font-semibold text-slate-800">{message.speaker}</span>
                           {message.roundCount ? (
-                            <span className="rounded-full bg-slate-200/80 px-2 py-0.5 text-[11px] text-slate-500">
-                              第 {message.roundCount} 轮
-                            </span>
+                            <span className="rounded-full bg-slate-200/80 px-2 py-0.5 text-[11px] text-slate-500">第 {message.roundCount} 轮</span>
                           ) : null}
                         </div>
 
