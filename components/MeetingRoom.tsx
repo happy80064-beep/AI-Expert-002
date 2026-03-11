@@ -15,6 +15,7 @@ import {
   resolveDefaultModelId,
   resolveProviderBaseUrl,
 } from '../modelProviders';
+import { getMissingApiBaseUrlMessage, resolveApiBaseUrl } from '../runtimeConfig';
 
 type ChatMessage = {
   id: string;
@@ -126,7 +127,7 @@ const loadStoredMeetingModelConfig = (): AIModelConfig => {
 };
 
 const MeetingRoom: React.FC<MeetingRoomProps> = ({
-  apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000',
+  apiBaseUrl = resolveApiBaseUrl(),
   initialTopic = '',
   initialExperts = ['产品专家', '财务专家', '市场专家'],
 }) => {
@@ -149,6 +150,7 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({
   const managedProvider = getManagedProvider(meetingModelConfig.provider);
   const providerBaseUrl = resolveProviderBaseUrl(managedProvider, meetingModelConfig.baseUrl);
   const providerModelOptions = PROVIDER_MODEL_PRESETS[managedProvider];
+  const selectedModelConfig = buildManagedModelConfig(meetingModelConfig);
   const canStart = topic.trim().length > 0 && experts.length > 0 && !!meetingModelConfig.apiKey?.trim() && !isStreaming;
   const blackboardEntries = Object.entries(blackboard);
 
@@ -279,6 +281,16 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({
   const stopMeeting = () => {
     if (!selectedModelConfig.apiKey?.trim()) {
       setError('请先填写模型 API Key。');
+      return;
+    }
+
+    if (!selectedModelConfig.apiKey?.trim()) {
+      setError('请先填写模型 API Key。');
+      return;
+    }
+
+    if (!apiBaseUrl) {
+      setError(getMissingApiBaseUrlMessage());
       return;
     }
 

@@ -2,8 +2,9 @@ import * as mammoth from 'mammoth/mammoth.browser';
 
 import { AIModelConfig, AnalysisResult, Expert, StructuredAnalysis, TaskResult } from '../types';
 import { buildManagedModelConfig } from '../modelProviders';
+import { getMissingApiBaseUrlMessage, resolveApiBaseUrl } from '../runtimeConfig';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
+const API_BASE_URL = resolveApiBaseUrl();
 
 type ChatMessage = {
   role: 'system' | 'user' | 'assistant';
@@ -17,6 +18,10 @@ const callBackendChat = async (
     jsonMode?: boolean;
   },
 ): Promise<string> => {
+  if (!API_BASE_URL) {
+    throw new Error(getMissingApiBaseUrlMessage());
+  }
+
   const managedModelConfig = options?.modelConfig ? buildManagedModelConfig(options.modelConfig) : undefined;
   const response = await fetch(`${API_BASE_URL}/api/chat`, {
     method: 'POST',
